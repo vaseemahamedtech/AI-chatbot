@@ -2,7 +2,8 @@ from flask import Flask, render_template, request, jsonify
 import os, time, logging, threading, multiprocessing
 from functools import wraps
 from dotenv import load_dotenv
-from google import genai
+import google.generativeai as genai
+
 from google.genai import types
 
 load_dotenv()
