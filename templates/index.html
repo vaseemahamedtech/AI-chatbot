@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Chatbot Interface</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+    <div class="chat-container">
+        <div class="chat-header">
+            <h1>Chat Assistant</h1>
+            <p>Ask questions and get answers with source citations</p>
+        </div>
+
+        <div class="chat-messages" id="chatMessages">
+            <div class="bot-message">
+                <div class="message-content">
+                    <span class="copy-btn" title="Copy message">📋</span>
+                    <p>Hello! I'm your chat assistant with access to real-time information. I can provide answers with source citations. How can I help you today?</p>
+                </div>
+            </div>
+        </div>
+
+        <div class="chat-input-container">
+            <div class="input-wrapper">
+                <input type="text" id="messageInput" placeholder="Type your message here..." maxlength="500">
+                <div class="control-buttons">
+                    <button id="micButton" title="Voice input">🎤</button>
+                    <button id="stopSpeechButton" title="Stop speech">⏹️</button>
+                    <button id="sendButton">Send</button>
+                </div>
+            </div>
+            <div class="typing-indicator" id="typingIndicator" style="display: none;">
+                <span>Bot is typing</span>
+                <div class="typing-dots">
+                    <span></span>
+                    <span></span>
+                    <span></span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="{{ url_for('static', filename='script.js') }}"></script>
+</body>
+</html>
