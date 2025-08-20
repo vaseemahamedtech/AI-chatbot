@@ -4,8 +4,6 @@ from functools import wraps
 from dotenv import load_dotenv
 import google.generativeai as genai
 
-from google.genai import types
-
 load_dotenv()
 app = Flask(__name__)
 
@@ -13,8 +11,8 @@ app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Initialize Gemini client
-client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
+# Initialize Gemini client (new way)
+genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
 
 # TTS process management
 tts_process = None
@@ -53,53 +51,43 @@ def stop_tts():
 def get_gemini_response_with_sources(question):
     """Get response from Gemini with Google Search grounding"""
     try:
-        # Configure grounding tool
-        grounding_tool = types.Tool(google_search=types.GoogleSearch())
-        
-        config = types.GenerateContentConfig(
-            tools=[grounding_tool],
-            temperature=0.7
-        )
-        
-        # Generate response
-        response = client.models.generate_content(
-            model="gemini-2.0-flash-exp",
+        model = genai.GenerativeModel("gemini-1.5-flash")  
+
+        # Generate response with search grounding (new API style)
+        response = model.generate_content(
             contents=question,
-            config=config
+            tools=[{"google_search": {}}],
+            generation_config={"temperature": 0.7}
         )
-        
+
         # Extract response text
-        response_text = response.text
-        
-        # Extract source links from grounding metadata
+        response_text = response.text if response and response.text else "⚠️ No response generated."
+
+        # Extract source links if available
         sources = []
-        if (response.candidates and 
-            len(response.candidates) > 0 and 
-            hasattr(response.candidates[0], 'grounding_metadata') and
-            response.candidates[0].grounding_metadata):
-            
-            grounding_data = response.candidates[0].grounding_metadata
-            
-            if hasattr(grounding_data, 'grounding_chunks'):
-                for chunk in grounding_data.grounding_chunks:
-                    if hasattr(chunk, 'web') and chunk.web:
-                        sources.append({
-                            'title': getattr(chunk.web, 'title', 'Source'),
-                            'url': getattr(chunk.web, 'uri', '')
-                        })
-                        if len(sources) >= 3:  # Limit to 3 sources
+        if hasattr(response, "candidates") and response.candidates:
+            for candidate in response.candidates:
+                grounding = getattr(candidate, "grounding_metadata", None)
+                if grounding and hasattr(grounding, "grounding_chunks"):
+                    for chunk in grounding.grounding_chunks:
+                        if hasattr(chunk, "web") and chunk.web:
+                            sources.append({
+                                "title": getattr(chunk.web, "title", "Source"),
+                                "url": getattr(chunk.web, "uri", "")
+                            })
+                        if len(sources) >= 3:
                             break
-        
+
         return {
-            'response': response_text,
-            'sources': sources
+            "response": response_text,
+            "sources": sources
         }
-        
+
     except Exception as e:
         logger.error(f"Gemini error: {e}")
         return {
-            'response': f"⚠️ Error: {str(e)}",
-            'sources': []
+            "response": f"⚠️ Error: {str(e)}",
+            "sources": []
         }
 
 def rate_limit(max_per_second=3):
@@ -107,7 +95,7 @@ def rate_limit(max_per_second=3):
     def decorator(f):
         f.last_called = 0
         f.min_interval = 1.0 / max_per_second
-        
+
         @wraps(f)
         def wrapper(*args, **kwargs):
             elapsed = time.time() - f.last_called
@@ -130,28 +118,28 @@ def ask():
     try:
         if not request.is_json:
             return jsonify({"error": "Content-Type must be application/json"}), 400
-        
+
         data = request.get_json()
         question = data.get("message", "").strip()
-        
+
         if not question:
             return jsonify({"response": "⚠️ No question received.", "sources": []}), 400
-        
+
         if len(question) > 500:
             return jsonify({"response": "⚠️ Message too long. Please keep it under 500 characters.", "sources": []}), 400
-        
+
         # Get response with sources
         result = get_gemini_response_with_sources(question)
-        
+
         # Start TTS in background
         threading.Thread(target=start_tts, args=(result['response'],), daemon=True).start()
-        
+
         return jsonify({
             "response": result['response'],
             "sources": result['sources'],
             "timestamp": time.time()
         })
-        
+
     except Exception as e:
         logger.error(f"Error in /ask endpoint: {e}")
         return jsonify({"response": "⚠️ An error occurred. Please try again.", "sources": []}), 500
@@ -176,3 +164,4 @@ def internal_error(error):
 
 if __name__ == "__main__":
     app.run(debug=True, threaded=True)
+
