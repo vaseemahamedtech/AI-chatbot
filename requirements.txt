@@ -1,6 +1,6 @@
 Flask
 python-dotenv
 pyttsx3
-google-generativeai==0.8.5
+google-generativeai>=0.3.0
 gunicorn
 requests
