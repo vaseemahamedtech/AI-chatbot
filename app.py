@@ -2,8 +2,8 @@ from flask import Flask, render_template, request, jsonify
 import os, time, logging, threading, multiprocessing
 from functools import wraps
 from dotenv import load_dotenv
-from google import genai
-from google.genai import types
+import google.generativeai as genai
+from google.generativeai import types
 
 load_dotenv()
 app = Flask(__name__)
@@ -12,8 +12,8 @@ app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Initialize Gemini client
-client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
+# Initialize Gemini client (configure once)
+genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
 
 # TTS process management
 tts_process = None
@@ -50,28 +50,32 @@ def stop_tts():
         tts_process = None
 
 def get_gemini_response_with_sources(question):
-    """Get response from Gemini with Google grounding (fixed syntax)"""
+    """Get response from Gemini with Google grounding"""
     try:
-        # Configure grounding tool (fixed)
+        # Configure grounding tool
         grounding_tool = types.Tool(
             google_search_retrieval=types.GoogleSearchRetrieval()
         )
-        
-        config = types.GenerateContentConfig(
-            tools=[grounding_tool],
+
+        config = types.GenerationConfig(
             temperature=0.7
         )
-        
-        # Generate response
-        response = client.models.generate_content(
-            model="gemini-2.0-flash-exp",
-            contents=question,
-            config=config
+
+        # Initialize Gemini model with tools
+        model = genai.GenerativeModel(
+            model_name="gemini-2.0-flash-exp",
+            tools=[grounding_tool]
         )
-        
+
+        # Generate response
+        response = model.generate_content(
+            question,
+            generation_config=config
+        )
+
         # Extract response text
         response_text = response.text if response.text else "⚠️ No response received."
-        
+
         # Extract sources if available
         sources = []
         if response.candidates:
@@ -91,7 +95,7 @@ def get_gemini_response_with_sources(question):
             "response": response_text,
             "sources": sources
         }
-        
+
     except Exception as e:
         logger.error(f"Gemini error: {e}")
         return {
@@ -104,7 +108,7 @@ def rate_limit(max_per_second=3):
     def decorator(f):
         f.last_called = 0
         f.min_interval = 1.0 / max_per_second
-        
+
         @wraps(f)
         def wrapper(*args, **kwargs):
             elapsed = time.time() - f.last_called
@@ -127,28 +131,28 @@ def ask():
     try:
         if not request.is_json:
             return jsonify({"error": "Content-Type must be application/json"}), 400
-        
+
         data = request.get_json()
         question = data.get("message", "").strip()
-        
+
         if not question:
             return jsonify({"response": "⚠️ No question received.", "sources": []}), 400
-        
+
         if len(question) > 500:
             return jsonify({"response": "⚠️ Message too long. Please keep it under 500 characters.", "sources": []}), 400
-        
+
         # Get response with sources
         result = get_gemini_response_with_sources(question)
-        
+
         # Start TTS in background
         threading.Thread(target=start_tts, args=(result['response'],), daemon=True).start()
-        
+
         return jsonify({
             "response": result['response'],
             "sources": result['sources'],
             "timestamp": time.time()
         })
-        
+
     except Exception as e:
         logger.error(f"Error in /ask endpoint: {e}")
         return jsonify({"response": "⚠️ An error occurred. Please try again.", "sources": []}), 500
@@ -173,5 +177,3 @@ def internal_error(error):
 
 if __name__ == "__main__":
     app.run(debug=True, threaded=True)
-
-
