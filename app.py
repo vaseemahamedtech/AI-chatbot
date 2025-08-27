@@ -12,7 +12,7 @@ app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Initialize Gemini client (configure once)
+# Initialize Gemini
 genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
 
 # TTS process management
@@ -34,7 +34,7 @@ def start_tts(text):
     """Start TTS in new process"""
     global tts_process
     with tts_lock:
-        stop_tts()  # Stop any existing TTS
+        stop_tts()
         tts_process = multiprocessing.Process(target=speak_in_process, args=(text,))
         tts_process.daemon = True
         tts_process.start()
@@ -50,71 +50,59 @@ def stop_tts():
         tts_process = None
 
 def get_gemini_response_with_sources(question):
-    """Get response from Gemini with Google grounding"""
+    """Get response from Gemini with Google Search grounding"""
     try:
-        # Configure grounding tool
+        # Define grounding tool for Gemini 2.x
         grounding_tool = types.Tool(
-            google_search_retrieval=types.GoogleSearchRetrieval()
+            google_search=types.GoogleSearch()
         )
 
-        config = types.GenerationConfig(
+        config = types.GenerateContentConfig(
+            tools=[grounding_tool],
             temperature=0.7
         )
 
-        # Initialize Gemini model with tools
         model = genai.GenerativeModel(
             model_name="gemini-2.0-flash-exp",
             tools=[grounding_tool]
         )
 
-        # Generate response
         response = model.generate_content(
             question,
             generation_config=config
         )
 
-        # Extract response text
-        response_text = response.text if response.text else "⚠️ No response received."
+        response_text = response.text or "⚠️ No response received."
 
-        # Extract sources if available
         sources = []
         if response.candidates:
             for candidate in response.candidates:
-                if hasattr(candidate, "grounding_metadata") and candidate.grounding_metadata:
-                    grounding_data = candidate.grounding_metadata
-                    if hasattr(grounding_data, "grounding_chunks"):
-                        for chunk in grounding_data.grounding_chunks:
-                            if hasattr(chunk, "web") and chunk.web:
-                                sources.append({
-                                    "title": getattr(chunk.web, "title", "Source"),
-                                    "url": getattr(chunk.web, "uri", "")
-                                })
-                                if len(sources) >= 3:
-                                    break
-        return {
-            "response": response_text,
-            "sources": sources
-        }
+                gm = getattr(candidate, "grounding_metadata", None)
+                if gm and hasattr(gm, "grounding_chunks"):
+                    for chunk in gm.grounding_chunks:
+                        if hasattr(chunk, "web") and chunk.web:
+                            sources.append({
+                                "title": getattr(chunk.web, "title", "Source"),
+                                "url": getattr(chunk.web, "uri", "")
+                            })
+                        if len(sources) >= 3:
+                            break
+
+        return {"response": response_text, "sources": sources}
 
     except Exception as e:
         logger.error(f"Gemini error: {e}")
-        return {
-            "response": f"⚠️ Error: {str(e)}",
-            "sources": []
-        }
+        return {"response": f"⚠️ Error: {str(e)}", "sources": []}
 
 def rate_limit(max_per_second=3):
-    """Rate limiting decorator"""
     def decorator(f):
         f.last_called = 0
         f.min_interval = 1.0 / max_per_second
-
         @wraps(f)
         def wrapper(*args, **kwargs):
             elapsed = time.time() - f.last_called
-            left_to_wait = f.min_interval - elapsed
-            if left_to_wait > 0:
-                time.sleep(left_to_wait)
+            if elapsed < f.min_interval:
+                time.sleep(f.min_interval - elapsed)
             ret = f(*args, **kwargs)
             f.last_called = time.time()
             return ret
@@ -131,27 +119,16 @@ def ask():
     try:
         if not request.is_json:
             return jsonify({"error": "Content-Type must be application/json"}), 400
-
         data = request.get_json()
         question = data.get("message", "").strip()
-
         if not question:
             return jsonify({"response": "⚠️ No question received.", "sources": []}), 400
-
         if len(question) > 500:
             return jsonify({"response": "⚠️ Message too long. Please keep it under 500 characters.", "sources": []}), 400
 
-        # Get response with sources
         result = get_gemini_response_with_sources(question)
-
-        # Start TTS in background
-        threading.Thread(target=start_tts, args=(result['response'],), daemon=True).start()
-
-        return jsonify({
-            "response": result['response'],
-            "sources": result['sources'],
-            "timestamp": time.time()
-        })
+        threading.Thread(target=start_tts, args=(result["response"],), daemon=True).start()
+        return jsonify({"response": result["response"], "sources": result["sources"], "timestamp": time.time()})
 
     except Exception as e:
         logger.error(f"Error in /ask endpoint: {e}")
@@ -159,7 +136,6 @@ def ask():
 
 @app.route("/stop_speech", methods=["POST"])
 def stop_speech():
-    """Stop TTS endpoint"""
     try:
         stop_tts()
         return jsonify({"status": "success", "message": "Speech stopped"})
